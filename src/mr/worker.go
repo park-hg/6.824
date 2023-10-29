@@ -55,14 +55,14 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		doMapTask(mapf, filename, buckets)
 	}
-	//
-	//for {
-	//	reduceTaskID, locations := CallReduceTaskAsk()
-	//	if reduceTaskID == -1 {
-	//		break
-	//	}
-	//	doReduceTask(reducef, reduceTaskID, locations)
-	//}
+
+	for {
+		reduceTaskID, locations := CallReduceTaskAsk()
+		if reduceTaskID == -1 {
+			break
+		}
+		doReduceTask(reducef, reduceTaskID, locations)
+	}
 }
 
 func HandShake() bool {
@@ -89,21 +89,16 @@ func doMapTask(mapf func(string, string) []KeyValue, filename string, buckets in
 	file.Close()
 	kva := mapf(filename, string(content))
 
-	filetitle := strings.Split(filename, ".")[0]
-	dir := fmt.Sprintf("m-intermediate-%s", filetitle)
-	os.Mkdir(dir, 0777)
-
 	intermediates := make([]*os.File, buckets)
 	locations := make([]string, buckets)
 	for i := 0; i < buckets; i++ {
-		iname := fmt.Sprintf("%s/out-%d", dir, i)
-		ofile, _ := os.Create(iname)
+		ofile, _ := os.CreateTemp("", fmt.Sprintf("map-%s", strings.Split(filename, ".")[0]))
 		intermediates[i] = ofile
-		locations[i] = iname
+		locations[i] = ofile.Name()
 	}
 
 	for i := range kva {
-		json.NewEncoder(intermediates[i%buckets]).Encode(&kva[i])
+		json.NewEncoder(intermediates[ihash(kva[i].Key)%buckets]).Encode(&kva[i])
 	}
 	for _, f := range intermediates {
 		f.Close()

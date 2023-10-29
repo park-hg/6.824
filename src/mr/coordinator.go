@@ -97,6 +97,14 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Finished = true
 	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Outputs = args.Outputs
 
+	if len(args.Outputs) != len(c.ReduceTaskInfo) {
+		panic("outputs of map worker should have the same length with nReduce")
+	}
+
+	for i, output := range args.Outputs {
+		c.ReduceTaskInfo[i].Inputs = append(c.ReduceTaskInfo[i].Inputs, output)
+	}
+
 	c.WorkerInfo[args.WorkerID].Status = Idle
 	reply.Error = nil
 	return nil
@@ -105,30 +113,30 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 func (c *Coordinator) GetReduceTask(args *AskReduceTaskArgs, reply *AskReduceTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	//for id, task := range c.ReduceTaskInfo {
-	//	if task.Finished {
-	//		continue
-	//	}
-	//	c.WorkerInfo[args.WorkerID].TaskID = id
-	//	c.WorkerInfo[args.WorkerID].Status = Running
-	//	reply.TaskID = id
-	//	reply.Inputs = c.makeInputs(id)
-	//	return nil
-	//}
-	//
-	//reply.TaskID = -1
+	for id, task := range c.ReduceTaskInfo {
+		if task.Finished {
+			continue
+		}
+		c.WorkerInfo[args.WorkerID].TaskID = id
+		c.WorkerInfo[args.WorkerID].Status = Running
+		reply.TaskID = id
+		reply.Inputs = task.Inputs
+		return nil
+	}
+
+	reply.TaskID = -1
 	return nil
 }
 
 func (c *Coordinator) CompleteReduceTask(args *CompleteReduceTaskArgs, reply *CompleteReduceTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	//
-	//c.ReduceTaskInfo[args.TaskID].Finished = true
-	//c.ReduceTaskInfo[args.TaskID].Outputs = args.Locations
-	//
-	//c.WorkerInfo[args.WorkerID].Status = Idle
-	//reply.Error = nil
+
+	c.ReduceTaskInfo[args.TaskID].Finished = true
+	c.ReduceTaskInfo[args.TaskID].Outputs = args.Locations
+
+	c.WorkerInfo[args.WorkerID].Status = Idle
+	reply.Error = nil
 	return nil
 }
 
