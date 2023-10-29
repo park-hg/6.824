@@ -7,7 +7,6 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
-	"time"
 )
 
 type Coordinator struct {
@@ -28,7 +27,6 @@ type WorkerInfo struct {
 type TaskInfo struct {
 	Finished bool
 	Inputs   []string
-	Outputs  []string
 }
 
 type WorkerStatus string
@@ -95,11 +93,6 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 	}
 
 	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Finished = true
-	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Outputs = args.Outputs
-
-	if len(args.Outputs) != len(c.ReduceTaskInfo) {
-		panic("outputs of map worker should have the same length with nReduce")
-	}
 
 	for i, output := range args.Outputs {
 		c.ReduceTaskInfo[i].Inputs = append(c.ReduceTaskInfo[i].Inputs, output)
@@ -113,6 +106,7 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 func (c *Coordinator) GetReduceTask(args *AskReduceTaskArgs, reply *AskReduceTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	for id, task := range c.ReduceTaskInfo {
 		if task.Finished {
 			continue
@@ -133,7 +127,6 @@ func (c *Coordinator) CompleteReduceTask(args *CompleteReduceTaskArgs, reply *Co
 	defer c.mu.Unlock()
 
 	c.ReduceTaskInfo[args.TaskID].Finished = true
-	c.ReduceTaskInfo[args.TaskID].Outputs = args.Locations
 
 	c.WorkerInfo[args.WorkerID].Status = Idle
 	reply.Error = nil
@@ -157,11 +150,18 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ret := true
 
 	// Your code here.
-	time.Sleep(60 * time.Second)
-	ret = true
+	for _, task := range c.ReduceTaskInfo {
+		if task.Finished {
+			continue
+		}
+		ret = false
+	}
 	return ret
 }
 
@@ -174,14 +174,14 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// Your code here.
 	c.WorkerInfo = make(map[int]*WorkerInfo)
 
-	c.MapTaskInfo = make(map[int]*TaskInfo, len(files)-1)
-	for i, f := range files[1:] {
-		c.MapTaskInfo[i] = &TaskInfo{Inputs: []string{f}, Finished: false}
+	c.MapTaskInfo = make(map[int]*TaskInfo, len(files))
+	for i, f := range files {
+		c.MapTaskInfo[i] = &TaskInfo{Finished: false, Inputs: []string{f}}
 	}
 
 	c.ReduceTaskInfo = make(map[int]*TaskInfo, nReduce)
 	for i := 0; i < nReduce; i++ {
-		c.ReduceTaskInfo[i] = &TaskInfo{Finished: false, Inputs: make([]string, nReduce)}
+		c.ReduceTaskInfo[i] = &TaskInfo{Finished: false, Inputs: []string{}}
 	}
 
 	c.server()
