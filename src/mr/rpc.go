@@ -44,6 +44,25 @@ type CompleteMapTaskReply struct {
 	Error error
 }
 
+type AskReduceTaskArgs struct {
+	WorkerID int
+}
+
+type AskReduceTaskReply struct {
+	TaskID    int
+	Locations []string
+}
+
+type CompleteReduceTaskArgs struct {
+	WorkerID  int
+	TaskID    int
+	Locations []string
+}
+
+type CompleteReduceTaskReply struct {
+	Error error
+}
+
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
 // Can't use the current directory since

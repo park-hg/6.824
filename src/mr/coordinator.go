@@ -6,13 +6,14 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sort"
 	"sync"
 )
 
 type Coordinator struct {
 	// Your definitions here.
 	MapTaskInfo    map[string]WorkerStatus
-	ReduceTaskInfo []bool
+	ReduceTaskInfo map[int]WorkerStatus
 
 	mu sync.Mutex
 }
@@ -69,6 +70,43 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 	return nil
 }
 
+func (c *Coordinator) GetReduceTask(args *AskReduceTaskArgs, reply *AskReduceTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for taskID := range c.ReduceTaskInfo {
+		if c.ReduceTaskInfo[taskID].Status != Idle {
+			continue
+		}
+		c.ReduceTaskInfo[taskID] = WorkerStatus{ID: args.WorkerID, Status: InProgress}
+		reply.TaskID = taskID
+		reply.Locations = c.makeIntermediateLocations(taskID)
+		return nil
+	}
+
+	reply.TaskID = -1
+	return nil
+}
+
+func (c *Coordinator) makeIntermediateLocations(reduceTaskID int) []string {
+	locations := make([]string, len(c.MapTaskInfo))
+	i := 0
+	for _, v := range c.MapTaskInfo {
+		locations[i] = v.Locations[reduceTaskID]
+		i++
+	}
+	sort.Strings(locations)
+	return locations
+}
+
+func (c *Coordinator) CompleteReduceTask(args *CompleteReduceTaskArgs, reply *CompleteReduceTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.ReduceTaskInfo[args.TaskID] = WorkerStatus{ID: args.WorkerID, Status: Completed, Locations: args.Locations}
+	reply.Error = nil
+	return nil
+}
+
 // start a thread that listens for RPCs from worker.go
 func (c *Coordinator) server() {
 	rpc.Register(c)
@@ -104,7 +142,10 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	for _, f := range files[1:] {
 		c.MapTaskInfo[f] = WorkerStatus{ID: -1, Status: Idle}
 	}
-	c.ReduceTaskInfo = make([]bool, nReduce, nReduce)
+	c.ReduceTaskInfo = make(map[int]WorkerStatus, nReduce)
+	for i := 0; i < nReduce; i++ {
+		c.ReduceTaskInfo[i] = WorkerStatus{ID: -1, Status: Idle}
+	}
 
 	c.server()
 	return &c

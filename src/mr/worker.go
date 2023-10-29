@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/rpc"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -16,6 +17,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -33,9 +42,16 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// uncomment to send the Example RPC to the coordinator.
 	filename, buckets := CallMapTaskAsk()
-	if filename == "" {
+	if filename != "" {
+		doMapTask(mapf, filename, buckets)
 		return
 	}
+
+	reduceTaskID, locations := CallReduceTaskAsk()
+	doReduceTask(reducef, reduceTaskID, locations)
+}
+
+func doMapTask(mapf func(string, string) []KeyValue, filename string, buckets int) {
 	file, err := os.Open(filename)
 	if err != nil {
 		log.Fatalf("cannot open %v", filename)
@@ -68,6 +84,49 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 
 	CallMapTaskComplete(filename, locations)
+}
+
+func doReduceTask(reducef func(string, []string) string, taskID int, locations []string) {
+	if taskID == -1 {
+		return
+	}
+
+	var kva []KeyValue
+	for _, path := range locations {
+		f, _ := os.Open(path)
+		dec := json.NewDecoder(f)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+	}
+
+	sort.Sort(ByKey(kva))
+	ofile, _ := os.CreateTemp("", fmt.Sprintf("reduce-%d", taskID))
+
+	i := 0
+	for i < len(kva) {
+		j := i + 1
+		for j < len(kva) && kva[j].Key == kva[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, kva[k].Value)
+		}
+		output := reducef(kva[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+		i = j
+	}
+
+	os.Rename(ofile.Name(), fmt.Sprintf("mr-out-%d", taskID))
+	CallReduceTaskComplete(taskID)
 }
 
 // example function to show how to make an RPC call to the coordinator.
@@ -103,6 +162,22 @@ func CallMapTaskComplete(filename string, locations []string) error {
 	args := CompleteMapTaskArgs{WorkerID: os.Getpid(), Filename: filename, Locations: locations}
 	reply := CompleteMapTaskReply{}
 	call("Coordinator.CompleteMapTask", &args, &reply)
+
+	return reply.Error
+}
+
+func CallReduceTaskAsk() (int, []string) {
+	args := AskReduceTaskArgs{WorkerID: os.Getpid()}
+	reply := AskReduceTaskReply{}
+	call("Coordinator.GetReduceTask", &args, &reply)
+
+	return reply.TaskID, reply.Locations
+}
+
+func CallReduceTaskComplete(taskID int) error {
+	args := CompleteReduceTaskArgs{WorkerID: os.Getpid(), TaskID: taskID}
+	reply := CompleteReduceTaskReply{}
+	call("Coordinator.CompleteReduceTask", &args, &reply)
 
 	return reply.Error
 }
