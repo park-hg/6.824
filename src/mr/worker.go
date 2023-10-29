@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -46,7 +47,6 @@ func Worker(mapf func(string, string) []KeyValue,
 	file.Close()
 	kva := mapf(filename, string(content))
 
-	//TODO: create new file to store intermediates and send that the job finished to the coordinator
 	filetitle := strings.Split(filename, ".")[0]
 	dir := fmt.Sprintf("m-intermediate-%s", filetitle)
 	os.Mkdir(dir, 0777)
@@ -61,7 +61,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 
 	for i := range kva {
-		fmt.Fprintf(intermediates[i%buckets], fmt.Sprintf("%s %s\n", kva[i].Key, kva[i].Value))
+		json.NewEncoder(intermediates[i%buckets]).Encode(&kva[i])
 	}
 	for _, f := range intermediates {
 		f.Close()
