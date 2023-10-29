@@ -35,9 +35,9 @@ type AskMapTaskReply struct {
 }
 
 type CompleteMapTaskArgs struct {
-	WorkerID  int
-	Filename  string
-	Locations []string
+	WorkerID int
+	Filename string
+	Outputs  []string
 }
 
 type CompleteMapTaskReply struct {
@@ -49,8 +49,8 @@ type AskReduceTaskArgs struct {
 }
 
 type AskReduceTaskReply struct {
-	TaskID    int
-	Locations []string
+	TaskID int
+	Inputs []string
 }
 
 type CompleteReduceTaskArgs struct {

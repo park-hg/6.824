@@ -40,15 +40,41 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	// Your worker implementation here.
 
-	// uncomment to send the Example RPC to the coordinator.
-	filename, buckets := CallMapTaskAsk()
-	if filename != "" {
-		doMapTask(mapf, filename, buckets)
-		return
+	for {
+		if ok := HandShake(); ok {
+			break
+		}
 	}
 
-	reduceTaskID, locations := CallReduceTaskAsk()
-	doReduceTask(reducef, reduceTaskID, locations)
+	// uncomment to send the Example RPC to the coordinator.
+	for {
+		filename, buckets := CallMapTaskAsk()
+		if filename == "" {
+			break
+		}
+
+		doMapTask(mapf, filename, buckets)
+	}
+	//
+	//for {
+	//	reduceTaskID, locations := CallReduceTaskAsk()
+	//	if reduceTaskID == -1 {
+	//		break
+	//	}
+	//	doReduceTask(reducef, reduceTaskID, locations)
+	//}
+}
+
+func HandShake() bool {
+	args := HandShakeArgs{WorkerID: os.Getpid()}
+	reply := HandShakeReply{}
+	call("Coordinator.HandShake", &args, &reply)
+
+	if reply.Status != "registered" {
+		return false
+	}
+
+	return true
 }
 
 func doMapTask(mapf func(string, string) []KeyValue, filename string, buckets int) {
@@ -159,7 +185,7 @@ func CallMapTaskAsk() (string, int) {
 }
 
 func CallMapTaskComplete(filename string, locations []string) error {
-	args := CompleteMapTaskArgs{WorkerID: os.Getpid(), Filename: filename, Locations: locations}
+	args := CompleteMapTaskArgs{WorkerID: os.Getpid(), Filename: filename, Outputs: locations}
 	reply := CompleteMapTaskReply{}
 	call("Coordinator.CompleteMapTask", &args, &reply)
 
@@ -171,7 +197,7 @@ func CallReduceTaskAsk() (int, []string) {
 	reply := AskReduceTaskReply{}
 	call("Coordinator.GetReduceTask", &args, &reply)
 
-	return reply.TaskID, reply.Locations
+	return reply.TaskID, reply.Inputs
 }
 
 func CallReduceTaskComplete(taskID int) error {

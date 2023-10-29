@@ -6,30 +6,37 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
-	"sort"
 	"sync"
+	"time"
 )
 
 type Coordinator struct {
 	// Your definitions here.
-	MapTaskInfo    map[string]WorkerStatus
-	ReduceTaskInfo map[int]WorkerStatus
+	WorkerInfo map[int]*WorkerInfo
+
+	MapTaskInfo    map[int]*TaskInfo
+	ReduceTaskInfo map[int]*TaskInfo
 
 	mu sync.Mutex
 }
 
-type WorkerStatus struct {
-	ID        int
-	Status    Status
-	Locations []string
+type WorkerInfo struct {
+	TaskID int
+	Status WorkerStatus
 }
 
-type Status string
+type TaskInfo struct {
+	Finished bool
+	Inputs   []string
+	Outputs  []string
+}
+
+type WorkerStatus string
 
 const (
-	Idle       = Status("idle")
-	InProgress = Status("in-progress")
-	Completed  = Status("completed")
+	Idle    = WorkerStatus("idle")
+	Running = WorkerStatus("running")
+	Crashed = WorkerStatus("crashed")
 )
 
 // Your code here -- RPC handlers for the worker to call.
@@ -42,30 +49,55 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	return nil
 }
 
-func (c *Coordinator) GetMapTask(args *AskMapTaskArgs, reply *AskMapTaskReply) error {
-	for filename, status := range c.MapTaskInfo {
-		c.mu.Lock()
-		if status.Status == Idle {
-			reply.Filename = filename
-			reply.Buckets = len(c.ReduceTaskInfo)
+type HandShakeArgs struct {
+	WorkerID int
+}
 
-			c.MapTaskInfo[filename] = WorkerStatus{ID: args.WorkerID, Status: InProgress}
-			c.mu.Unlock()
-			break
+type HandShakeReply struct {
+	Status string
+}
+
+func (c *Coordinator) HandShake(args *HandShakeArgs, reply *HandShakeReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.WorkerInfo[args.WorkerID] = &WorkerInfo{Status: Idle}
+	reply.Status = "registered"
+	return nil
+}
+
+func (c *Coordinator) GetMapTask(args *AskMapTaskArgs, reply *AskMapTaskReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for id, task := range c.MapTaskInfo {
+		if task.Finished {
+			continue
 		}
-		c.mu.Unlock()
+		c.WorkerInfo[args.WorkerID].TaskID = id
+		c.WorkerInfo[args.WorkerID].Status = Running
+
+		reply.Filename = task.Inputs[0]
+		reply.Buckets = len(c.ReduceTaskInfo)
+		break
 	}
+
 	return nil
 }
 
 func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *CompleteMapTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.MapTaskInfo[args.Filename].Status == Completed {
+	if c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Finished {
+		c.WorkerInfo[args.WorkerID].Status = Idle
 		reply.Error = nil
 		return nil
 	}
-	c.MapTaskInfo[args.Filename] = WorkerStatus{ID: args.WorkerID, Status: Completed, Locations: args.Locations}
+
+	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Finished = true
+	c.MapTaskInfo[c.WorkerInfo[args.WorkerID].TaskID].Outputs = args.Outputs
+
+	c.WorkerInfo[args.WorkerID].Status = Idle
 	reply.Error = nil
 	return nil
 }
@@ -73,37 +105,30 @@ func (c *Coordinator) CompleteMapTask(args *CompleteMapTaskArgs, reply *Complete
 func (c *Coordinator) GetReduceTask(args *AskReduceTaskArgs, reply *AskReduceTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for taskID := range c.ReduceTaskInfo {
-		if c.ReduceTaskInfo[taskID].Status != Idle {
-			continue
-		}
-		c.ReduceTaskInfo[taskID] = WorkerStatus{ID: args.WorkerID, Status: InProgress}
-		reply.TaskID = taskID
-		reply.Locations = c.makeIntermediateLocations(taskID)
-		return nil
-	}
-
-	reply.TaskID = -1
+	//for id, task := range c.ReduceTaskInfo {
+	//	if task.Finished {
+	//		continue
+	//	}
+	//	c.WorkerInfo[args.WorkerID].TaskID = id
+	//	c.WorkerInfo[args.WorkerID].Status = Running
+	//	reply.TaskID = id
+	//	reply.Inputs = c.makeInputs(id)
+	//	return nil
+	//}
+	//
+	//reply.TaskID = -1
 	return nil
-}
-
-func (c *Coordinator) makeIntermediateLocations(reduceTaskID int) []string {
-	locations := make([]string, len(c.MapTaskInfo))
-	i := 0
-	for _, v := range c.MapTaskInfo {
-		locations[i] = v.Locations[reduceTaskID]
-		i++
-	}
-	sort.Strings(locations)
-	return locations
 }
 
 func (c *Coordinator) CompleteReduceTask(args *CompleteReduceTaskArgs, reply *CompleteReduceTaskReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	c.ReduceTaskInfo[args.TaskID] = WorkerStatus{ID: args.WorkerID, Status: Completed, Locations: args.Locations}
-	reply.Error = nil
+	//
+	//c.ReduceTaskInfo[args.TaskID].Finished = true
+	//c.ReduceTaskInfo[args.TaskID].Outputs = args.Locations
+	//
+	//c.WorkerInfo[args.WorkerID].Status = Idle
+	//reply.Error = nil
 	return nil
 }
 
@@ -127,7 +152,8 @@ func (c *Coordinator) Done() bool {
 	ret := false
 
 	// Your code here.
-
+	time.Sleep(60 * time.Second)
+	ret = true
 	return ret
 }
 
@@ -138,13 +164,16 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// Your code here.
-	c.MapTaskInfo = make(map[string]WorkerStatus, len(files)-1)
-	for _, f := range files[1:] {
-		c.MapTaskInfo[f] = WorkerStatus{ID: -1, Status: Idle}
+	c.WorkerInfo = make(map[int]*WorkerInfo)
+
+	c.MapTaskInfo = make(map[int]*TaskInfo, len(files)-1)
+	for i, f := range files[1:] {
+		c.MapTaskInfo[i] = &TaskInfo{Inputs: []string{f}, Finished: false}
 	}
-	c.ReduceTaskInfo = make(map[int]WorkerStatus, nReduce)
+
+	c.ReduceTaskInfo = make(map[int]*TaskInfo, nReduce)
 	for i := 0; i < nReduce; i++ {
-		c.ReduceTaskInfo[i] = WorkerStatus{ID: -1, Status: Idle}
+		c.ReduceTaskInfo[i] = &TaskInfo{Finished: false, Inputs: make([]string, nReduce)}
 	}
 
 	c.server()
